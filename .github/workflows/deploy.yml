@@ -1,0 +1,52 @@
+# Сборка и публикация игры на GitHub Pages.
+#
+# dist/ намеренно НЕ хранится в репозитории: собранный файл в истории git —
+# источник конфликтов и устаревших версий. Здесь его каждый раз собирает
+# сам GitHub из исходников, поэтому опубликованное всегда соответствует коду.
+name: Deploy to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Параллельные деплои затирают друг друга; берём последний, предыдущий отменяем.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # npm run build прогоняет tsc --noEmit перед vite build,
+      # поэтому ошибка типов роняет деплой, а не уезжает в прод.
+      - run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
