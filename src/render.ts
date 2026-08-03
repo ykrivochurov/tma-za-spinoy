@@ -4,6 +4,7 @@ import { COLORS } from './palette';
 import { drawParticles } from './particles';
 import { drawBackdrop } from './backdrop';
 import { drawCreature } from './bestiary';
+import { drawSignal, drawThirdRail, drawTrack, drawTrainCar } from './metro';
 
 /**
  * Весь арт — векторный и процедурный: ни одного файла-ассета.
@@ -33,15 +34,17 @@ export function drawWorld(
   if (!lit) ctx.globalAlpha = DARK_VISIBILITY;
 
   drawMass(ctx, room, lit);
+  for (const car of room.trains) drawTrainCar(ctx, car, lit);
+  if (lit) for (const g of room.signals) drawSignal(ctx, g.x, g.y, time);
   drawCrumble(ctx, room, time, lit);
   drawRad(ctx, room, time, lit);
   drawSpikes(ctx, room, lit);
   drawDoors(ctx, room, lit);
-  drawDresinas(ctx, room, lit);
+  drawDresinas(ctx, room, time, lit);
   drawCrystals(ctx, room, time, lit);
   drawGoal(ctx, room, time, lit);
 
-  for (const c of room.creatures) drawCreature(ctx, c, lit);
+  for (const c of room.creatures) if (!c.gone) drawCreature(ctx, c, lit);
 
   if (lit) {
     drawLamps(ctx, room, time);
@@ -150,26 +153,26 @@ function drawMass(ctx: CanvasRenderingContext2D, room: Room, lit: boolean): void
   ctx.stroke();
   ctx.restore();
 
-  // --- 5. рельсы по открытым верхним граням: пол читается как путь, а не полка
+  // --- 5. путь по открытым верхним граням: пол читается как перегон, а не полка
   if (lit) {
-    ctx.strokeStyle = COLORS.rail;
     ctx.globalAlpha = alpha * 0.9;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
     for (let ty = 0; ty < ROOM_H; ty++) {
+      // Контактный рельс кладём только на длинные сплошные участки: на трёх
+      // тайлах площадки он читается не как метро, а как мусор вдоль кромки.
+      let run = 0;
+      for (let tx = 0; tx <= ROOM_W; tx++) {
+        const open = tx < ROOM_W && isSolid(room, tx, ty) && !isSolid(room, tx, ty - 1);
+        if (open) { run++; continue; }
+        if (run >= 6) {
+          for (let k = tx - run; k < tx; k++) drawThirdRail(ctx, k * TILE, ty * TILE);
+        }
+        run = 0;
+      }
       for (let tx = 0; tx < ROOM_W; tx++) {
         if (!isSolid(room, tx, ty) || isSolid(room, tx, ty - 1)) continue;
-        const x = tx * TILE;
-        const y = ty * TILE;
-        ctx.moveTo(x, y + 6.5);
-        ctx.lineTo(x + TILE, y + 6.5);
-        ctx.moveTo(x + 4.5, y + 3);
-        ctx.lineTo(x + 4.5, y + 10);
-        ctx.moveTo(x + 11.5, y + 3);
-        ctx.lineTo(x + 11.5, y + 10);
+        drawTrack(ctx, tx * TILE, ty * TILE);
       }
     }
-    ctx.stroke();
     ctx.globalAlpha = alpha;
   }
 }
@@ -394,28 +397,52 @@ function drawDoors(ctx: CanvasRenderingContext2D, room: Room, lit: boolean): voi
   }
 }
 
-function drawDresinas(ctx: CanvasRenderingContext2D, room: Room, lit: boolean): void {
+/**
+ * Дрезина — ручная качалка, а не летающая плита: настил, четыре колеса на рельсе
+ * и коромысло, которое ходит вверх-вниз в такт движению. Именно качающийся рычаг
+ * объясняет, почему платформа едет сама, — без него она читается как магия.
+ */
+function drawDresinas(ctx: CanvasRenderingContext2D, room: Room, time: number, lit: boolean): void {
   for (const d of room.dresinas) {
-    ctx.fillStyle = lit ? COLORS.massCore : '#05070c';
-    ctx.fillRect(d.x, d.y, d.w, d.h);
+    // Настил.
+    ctx.fillStyle = lit ? COLORS.carBodyDark : '#05070c';
+    ctx.fillRect(d.x, d.y + 2, d.w, d.h - 2);
     ctx.strokeStyle = lit ? COLORS.massEdge : COLORS.massEdgeDim;
-    ctx.lineWidth = 1.8;
+    ctx.lineWidth = 1.6;
     ctx.beginPath();
-    ctx.moveTo(d.x + 1, d.y + 1);
-    ctx.lineTo(d.x + d.w - 1, d.y + 1);
+    ctx.moveTo(d.x, d.y + 2.5);
+    ctx.lineTo(d.x + d.w, d.y + 2.5);
     ctx.stroke();
     if (!lit) continue;
 
+    // Доски настила.
     ctx.strokeStyle = COLORS.rail;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(d.x + 1.5, d.y + 1.5, d.w - 3, d.h - 3);
-    // Колёса и рычаг: без них платформа не читается как едущая.
-    ctx.fillStyle = COLORS.rail;
-    ctx.fillRect(d.x + 5, d.y + d.h - 1, 5, 3);
-    ctx.fillRect(d.x + d.w - 10, d.y + d.h - 1, 5, 3);
+    ctx.lineWidth = 0.8;
     ctx.beginPath();
-    ctx.moveTo(d.x + d.w / 2, d.y + 1);
-    ctx.lineTo(d.x + d.w / 2 + 3, d.y - 7);
+    for (let k = 1; k < 4; k++) {
+      ctx.moveTo(d.x + (d.w * k) / 4, d.y + 3);
+      ctx.lineTo(d.x + (d.w * k) / 4, d.y + d.h);
+    }
+    ctx.stroke();
+
+    // Колёса на ободе — по два с каждой стороны, как у настоящей платформы.
+    ctx.fillStyle = COLORS.rail;
+    for (const wx of [d.x + 6, d.x + 12, d.x + d.w - 12, d.x + d.w - 6]) {
+      ctx.beginPath();
+      ctx.arc(wx, d.y + d.h + 1, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Коромысло: ходит в такт ходу, поэтому дрезина выглядит приводимой в движение.
+    const swing = Math.sin(time * 5 + d.x * 0.1) * 4;
+    const cx = d.x + d.w / 2;
+    ctx.strokeStyle = COLORS.carEdge;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(cx, d.y + 2);
+    ctx.lineTo(cx, d.y - 9);
+    ctx.moveTo(cx - 7, d.y - 9 + swing);
+    ctx.lineTo(cx + 7, d.y - 9 - swing);
     ctx.stroke();
   }
 }

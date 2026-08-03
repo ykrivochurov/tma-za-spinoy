@@ -233,7 +233,7 @@ function render(time: number): void {
 function nearestThreat(): number {
   let worst = 0;
   for (const c of state.room.creatures) {
-    if (c.repelled) continue;
+    if (c.repelled || c.gone || c.dying > 0) continue;
     const d = Math.hypot(c.x - player.cx, c.y - player.cy);
     worst = Math.max(worst, 1 - Math.min(1, d / 210));
   }
@@ -294,6 +294,6 @@ function frame(now: number): void {
 requestAnimationFrame(frame);
 
 console.log(
-  '%cТЬМА ЗА СПИНОЙ%c  F1 — debug   ·   1..%d — выбор перегона   ·   R — рестарт   ·   M — звук',
+  '%cТЬМА ЗА СПИНОЙ%c  %d перегонов   ·   1..9 — выбор   ·   F1 — debug   ·   R — рестарт   ·   M — звук',
   'color:#ffb45c;font-weight:bold', 'color:#5d6684', ROOM_COUNT,
 );

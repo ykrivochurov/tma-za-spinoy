@@ -77,6 +77,16 @@ export function repels(room: Room, x: number, y: number): boolean {
   return inLamp(room, x, y);
 }
 
+/**
+ * Попадает ли точка именно в КОНУС ФОНАРЯ — без ламп и без ореола.
+ * Это и есть оружие: только направленный луч жжёт тварей.
+ */
+export function inBeamAt(x: number, y: number): boolean {
+  const dx = x - light.x;
+  const dy = y - light.y;
+  return inBeam(dx, dy, Math.hypot(dx, dy));
+}
+
 function inBeam(dx: number, dy: number, d: number): boolean {
   return d < LIGHT_CONE_LEN && (dx * light.dirX + dy * light.dirY) / d > COS_HALF;
 }

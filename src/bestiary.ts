@@ -9,16 +9,28 @@
  * Во тьме от любой твари видно только глаза: рисунок тела идёт лишь в `lit`-проходе.
  */
 
+import { CREATURE_KINDS } from './tuning';
 import { bone, disc, ik2, limb, pt, spine, type Pt } from './rig';
 import { COLORS } from './palette';
 import type { Creature } from './entities';
 
 export function drawCreature(ctx: CanvasRenderingContext2D, c: Creature, lit: boolean): void {
-  if (lit) {
+  if (c.gone) return;
+
+  // Ожог 0..1. Он рисуется ВСЕГДА, даже в тёмном проходе: игрок обязан видеть,
+  // что луч работает, иначе непонятно, добиваешь ты тварь или зря светишь.
+  const heat = Math.min(1, c.burn / CREATURE_KINDS[c.kind].hp);
+
+  if (lit || heat > 0.05 || c.dying > 0) {
     ctx.save();
-    ctx.globalAlpha = c.alpha;
-    ctx.strokeStyle = COLORS.creature;
-    ctx.fillStyle = COLORS.creature;
+    ctx.globalAlpha = c.alpha * (lit ? 1 : Math.max(heat, c.dying > 0 ? 1 : 0));
+    // Раскаляется от собственной породы к белому: сначала тлеет, потом слепит.
+    ctx.strokeStyle = heat > 0 ? mixHeat(heat) : COLORS.creature;
+    ctx.fillStyle = ctx.strokeStyle;
+    if (heat > 0.15) {
+      ctx.shadowColor = COLORS.creatureEye;
+      ctx.shadowBlur = 3 + heat * 12;
+    }
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
@@ -29,7 +41,15 @@ export function drawCreature(ctx: CanvasRenderingContext2D, c: Creature, lit: bo
     ctx.restore();
   }
 
-  drawEyes(ctx, c, lit);
+  if (c.dying <= 0) drawEyes(ctx, c, lit);
+}
+
+/** Цвет тела по мере прогорания: тёмная порода → уголь → раскалённое. */
+function mixHeat(t: number): string {
+  const from = [28, 36, 57];
+  const to = [255, 196, 128];
+  const c = from.map((v, i) => Math.round(v + (to[i] - v) * t));
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 }
 
 /** Глаза горят всегда — единственное, что выдаёт тварь в темноте. */

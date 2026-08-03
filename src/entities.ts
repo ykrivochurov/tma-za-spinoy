@@ -1,10 +1,11 @@
 import {
   CREATURE_AGGRO, CREATURE_FLEE_SPEED, CREATURE_KINDS, CREATURE_LEASH, CREATURE_SPEED,
-  CREATURE_TOUCH, CRUMBLE_DELAY, CRUMBLE_RESPAWN, DOOR_CLOSED_TIME, DOOR_OPEN_TIME,
-  DOOR_WARN_TIME, DRESINA_SPEED, ROOM_W, TILE, type CreatureKind,
+  CREATURE_BURN_COOL, CREATURE_DIE_TIME, CREATURE_TOUCH, CRUMBLE_DELAY, CRUMBLE_RESPAWN,
+  DOOR_CLOSED_TIME, DOOR_OPEN_TIME, DOOR_WARN_TIME, DRESINA_SPEED, ROOM_W, TILE,
+  type CreatureKind,
 } from './tuning';
 import { Crumb, Tile, tileAt, type Room } from './level';
-import { isLit, repels } from './lighting';
+import { inBeamAt, isLit, repels } from './lighting';
 import { addShake } from './fx';
 import { burst } from './particles';
 import { sfx } from './audio';
@@ -32,6 +33,12 @@ export interface Creature {
   repelled: boolean;
   /** Видимость: тварь проступает из темноты, а не появляется рывком. */
   alpha: number;
+  /** Накопленный ожог, секунды под лучом. Дошёл до `hp` вида — тварь сгорела. */
+  burn: number;
+  /** Обратный отсчёт осыпания. Больше нуля — тварь уже мертва и никого не тронет. */
+  dying: number;
+  /** Сгорела совсем: больше не обновляется и не рисуется. */
+  gone: boolean;
   /** Фаза собственного движения: шаг упыря, взмах нетопыря, качание горбуна. */
   phase: number;
   /** Сглаженное направление взгляда — тварь разворачивается, а не телепортируется. */
@@ -66,9 +73,37 @@ export interface Door {
 
 export function updateCreatures(room: Room, player: Player, dt: number): void {
   for (const c of room.creatures) {
+    if (c.gone) continue;
     const k = CREATURE_KINDS[c.kind];
+
+    // Догорающая тварь осыпается и уже никого не трогает.
+    if (c.dying > 0) {
+      c.dying -= dt;
+      c.alpha = Math.max(0, c.dying / CREATURE_DIE_TIME);
+      if (c.dying <= 0) c.gone = true;
+      continue;
+    }
+
     c.seen = isLit(room, c.x, c.y);
     c.repelled = repels(room, c.x, c.y);
+
+    // Жжёт только направленный луч. Лампы отгоняют, но не убивают: иначе всё,
+    // что стоит рядом со светильником, сгорело бы на первом же кадре.
+    if (inBeamAt(c.x, c.y)) c.burn += dt;
+    else c.burn = Math.max(0, c.burn - dt * CREATURE_BURN_COOL);
+
+    if (c.burn >= k.hp) {
+      c.dying = CREATURE_DIE_TIME;
+      addShake(2.2);
+      burst(c.x, c.y, 18, {
+        speed: 170, life: 0.5, size: 2.5, color: COLORS.creatureEye, drag: 2.4,
+      });
+      burst(c.x, c.y, 10, {
+        speed: 90, life: 0.7, size: 3, color: COLORS.creature, drag: 1.4,
+      });
+      sfx.creatureDie();
+      continue;
+    }
 
     const dx = player.cx - c.x;
     const dy = player.cy - c.y;
@@ -125,7 +160,7 @@ export function updateCreatures(room: Room, player: Player, dt: number): void {
     // Касание убивает всегда. Свет — не щит вокруг игрока, а то, чем тварь
     // отталкивают ДО того, как она дошла: раньше здесь стояла проверка на свет,
     // и она делала врагов принципиально безвредными.
-    if (!player.dead && dist < CREATURE_TOUCH * k.touch + player.w / 2) {
+    if (!player.dead && c.dying <= 0 && dist < CREATURE_TOUCH * k.touch + player.w / 2) {
       player.kill();
     }
   }

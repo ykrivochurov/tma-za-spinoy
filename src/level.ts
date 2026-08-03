@@ -10,11 +10,24 @@ export const Tile = {
   Rad: 3,
   /** Гнилая шпала: твёрдая, пока не осыпалась. */
   Crumble: 4,
+  /** Кузов вагона: твёрдый, но рисуется не породой, а составом. */
+  Train: 5,
 } as const;
 export type Tile = (typeof Tile)[keyof typeof Tile];
 
 /** Состояние гнилой шпалы. */
 export const Crumb = { Intact: 0, Shaking: 1, Gone: 2 } as const;
+
+/** Габарит вагона в пикселях: связная область тайлов `T`, найденная при сборке комнаты. */
+export interface TrainCar {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Есть ли кабина слева / справа — то есть является ли вагон головным. */
+  headLeft: boolean;
+  headRight: boolean;
+}
 
 export interface Crystal {
   x: number;
@@ -30,6 +43,9 @@ export interface Room {
   crystals: Crystal[];
   goal: { x: number; y: number } | null;
   lamps: Lamp[];
+  trains: TrainCar[];
+  /** Путевые светофоры — чистый декор, физики не касаются. */
+  signals: { x: number; y: number }[];
   creatures: Creature[];
   dresinas: Dresina[];
   doors: Door[];
@@ -96,7 +112,8 @@ function auditRoom(tag: string, map: string[]): string[] {
   const at = (x: number, y: number): string =>
     (x < 0 || x >= ROOM_W || y < 0 || y >= ROOM_H) ? '#' : map[y][x];
 
-  const isRock = (x: number, y: number): boolean => at(x, y) === '#' || at(x, y) === 'c';
+  const isRock = (x: number, y: number): boolean =>
+    at(x, y) === '#' || at(x, y) === 'c' || at(x, y) === 'T';
   // Арматура непроходима: сквозь неё не ходят, её перепрыгивают.
   const blocks = (x: number, y: number): boolean => isRock(x, y) || at(x, y) === '^';
   // Клетка, куда помещается игрок: он выше тайла, значит нужны два пустых ряда.
@@ -209,6 +226,7 @@ export function buildRoom(index: number): Room {
   const tiles = new Uint8Array(ROOM_W * ROOM_H);
   const crystals: Crystal[] = [];
   const lamps: Lamp[] = [];
+  const signals: { x: number; y: number }[] = [];
   const creatures: Creature[] = [];
   const dresinas: Dresina[] = [];
   const doors: Door[] = [];
@@ -229,16 +247,19 @@ export function buildRoom(index: number): Room {
         case '^': tiles[i] = Tile.Spike; break;
         case '~': tiles[i] = Tile.Rad; break;
         case 'c': tiles[i] = Tile.Crumble; break;
+        case 'T': tiles[i] = Tile.Train; break;
         case 'P': spawn = { x: cx, y: (y + 1) * TILE }; break;
         case 'E': goal = { x: cx, y: (y + 1) * TILE }; break;
         case 'o': crystals.push({ x: cx, y: cy, alive: true, respawn: 0 }); break;
         case 'L': lamps.push({ x: cx, y: cy, seed: x * 7.13 + y * 3.71 }); break;
+        case 'S': signals.push({ x: x * TILE, y: y * TILE }); break;
         case 'M': case 'W': case 'B': {
           // M — упырь, W — горбун, B — нетопырь. Повадка и силуэт берутся из вида.
           const kind: CreatureKind = c === 'W' ? 'brute' : c === 'B' ? 'bat' : 'ghoul';
           creatures.push({
             kind, x: cx, y: cy, homeX: cx, homeY: cy, vx: 0, vy: 0,
-            seen: false, repelled: false, alpha: 0, phase: 0, facing: -1, pitch: 0,
+            seen: false, repelled: false, alpha: 0, burn: 0, dying: 0, gone: false,
+            phase: 0, facing: -1, pitch: 0,
             seed: x * 1.37 + y * 2.71,
           });
           break;
@@ -270,12 +291,54 @@ export function buildRoom(index: number): Room {
   }
 
   return {
-    def, tiles, spawn, crystals, goal, lamps, creatures, dresinas, doors,
+    def, tiles, spawn, crystals, goal, lamps, signals, trains: findTrains(tiles),
+    creatures, dresinas, doors,
     crumbState: new Uint8Array(ROOM_W * ROOM_H),
     crumbTimer: new Float32Array(ROOM_W * ROOM_H),
     doorTimer: 0,
     wind: def.wind ?? 0,
   };
+}
+
+/**
+ * Собирает вагоны из связных областей тайлов `T`.
+ *
+ * Габарит считается ОДИН РАЗ при сборке комнаты, а не каждый кадр: рисование
+ * вагона — это окна, двери и тележки по всей его длине, и искать границы
+ * состава на каждом кадре было бы чистой растратой.
+ *
+ * Головным вагон считается по открытому торцу: если слева от области нет
+ * соседнего вагона — там кабина с прожекторами, если есть — сцепка.
+ */
+function findTrains(tiles: Uint8Array): TrainCar[] {
+  const seen = new Uint8Array(ROOM_W * ROOM_H);
+  const cars: TrainCar[] = [];
+  const isTrain = (x: number, y: number): boolean =>
+    x >= 0 && x < ROOM_W && y >= 0 && y < ROOM_H && tiles[y * ROOM_W + x] === Tile.Train;
+
+  for (let y = 0; y < ROOM_H; y++) {
+    for (let x = 0; x < ROOM_W; x++) {
+      if (!isTrain(x, y) || seen[y * ROOM_W + x]) continue;
+      let x0 = x, x1 = x, y0 = y, y1 = y;
+      const stack = [{ x, y }];
+      while (stack.length) {
+        const p = stack.pop()!;
+        const k = p.y * ROOM_W + p.x;
+        if (!isTrain(p.x, p.y) || seen[k]) continue;
+        seen[k] = 1;
+        x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x);
+        y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y);
+        stack.push({ x: p.x - 1, y: p.y }, { x: p.x + 1, y: p.y });
+        stack.push({ x: p.x, y: p.y - 1 }, { x: p.x, y: p.y + 1 });
+      }
+      cars.push({
+        x: x0 * TILE, y: y0 * TILE,
+        w: (x1 - x0 + 1) * TILE, h: (y1 - y0 + 1) * TILE,
+        headLeft: !isTrain(x0 - 1, y0), headRight: !isTrain(x1 + 1, y0),
+      });
+    }
+  }
+  return cars;
 }
 
 export function tileAt(room: Room, tx: number, ty: number): Tile {
@@ -286,7 +349,7 @@ export function tileAt(room: Room, tx: number, ty: number): Tile {
 /** Твёрдая ли клетка прямо сейчас: бетон всегда, гнилая шпала — пока не осыпалась. */
 function tileBlocks(room: Room, tx: number, ty: number): boolean {
   const t = tileAt(room, tx, ty);
-  if (t === Tile.Solid) return true;
+  if (t === Tile.Solid || t === Tile.Train) return true;
   if (t === Tile.Crumble) return room.crumbState[ty * ROOM_W + tx] !== Crumb.Gone;
   return false;
 }

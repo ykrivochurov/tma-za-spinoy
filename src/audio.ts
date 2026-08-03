@@ -40,6 +40,7 @@ const VOL = {
   doorWarn: 0.18,
   doorSlam: 0.40,
   growl: 0.20,
+  creatureDie: 0.30,
   geiger: 0.34,
   goal: 0.28,
   /** Гул тоннеля. Держать НИЗКО: он звучит всегда и глушит короткие события. */
@@ -358,6 +359,12 @@ export const sfx = {
     const base = 92 - near * 30;
     tone({ from: base, to: base * 0.75, dur: 0.55, vol: VOL.growl * near, type: 'sawtooth', attack: 0.25 });
     hiss({ dur: 0.5, vol: VOL.growl * near * 0.5, from: 260, to: 130, type: 'lowpass' });
+  },
+
+  /** Тварь догорела: визг, срывающийся в шипение. */
+  creatureDie(): void {
+    tone({ from: 620, to: 110, dur: 0.35, vol: VOL.creatureDie, type: 'sawtooth' });
+    hiss({ dur: 0.32, vol: VOL.creatureDie * 0.8, from: 2400, to: 260, type: 'bandpass', q: 0.8 });
   },
 
   goal(): void {
